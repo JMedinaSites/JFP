@@ -1,34 +1,47 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <link rel="apple-touch-icon" href="icon.png">
+   <link rel="apple-touch-icon" href="icon.png">
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>JFP — Johnni's Fitness Pal</title>
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <style>
-    html, body, #root { margin: 0; min-height: 100%; height: 100%; background: #fef8f2; }
-    body { overflow: hidden; }
+    html, body, #root {
+      margin: 0;
+      min-height: 100%;
+      height: 100%;
+      background: #fef8f2;
+    }
     * { box-sizing: border-box; }
+    button, input, textarea { font-family: inherit; }
   </style>
 </head>
 <body>
   <div id="root"></div>
-  <script>
-    window.storage = window.storage || {
-      async get(key) {
-        const value = localStorage.getItem(key);
-        return value === null ? null : { value };
-      },
-      async set(key, value) {
-        localStorage.setItem(key, value);
-        return { value };
-      }
-    };
-  </script>
-  <script type="text/babel" data-presets="env,react">
+
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel">
+    // Claude Artifacts provides window.storage. This shim makes the app work as a normal HTML file too.
+    if (!window.storage) {
+      window.storage = {
+        async get(key) {
+          const value = localStorage.getItem(key);
+          return value === null ? null : { value };
+        },
+        async set(key, value) {
+          localStorage.setItem(key, value);
+          return { value };
+        },
+        async delete(key) {
+          localStorage.removeItem(key);
+          return {};
+        }
+      };
+    }
+
 const { useState, useEffect, useRef } = React;
 
 const BASE_MEALS = [
@@ -105,25 +118,22 @@ After logging, include updated cal/protein/fiber totals naturally in your messag
 }
 
 async function fetchMicroEstimates(loggedMeals, fiberActual) {
-  // Browser-safe local estimate. This replaces the Claude Artifact API call so the HTML runs on its own.
-  const text = loggedMeals.map(m => (m.name + " " + (m.notes || "")).toLowerCase()).join(" ");
-  const has = (...words) => words.some(w => text.includes(w));
-  const count = loggedMeals.length || 1;
-  const base = {
-    vitC: has("apple", "veg", "broccoli", "spinach", "pea") ? 45 : 15,
-    vitD: has("egg", "milk", "fairlife") ? 35 : 10,
-    vitE: has("sunflower", "veg") ? 45 : 15,
-    vitK: has("spinach", "broccoli", "veg", "pea") ? 70 : 18,
-    iron: has("pea", "spinach", "bacon", "ham", "turkey") ? 45 : 20,
-    magnesium: has("pea", "protein+", "kodiak", "spinach") ? 45 : 20,
-    calcium: has("cheese", "swiss", "mozzarella", "milk", "fairlife", "cottage") ? 75 : 25,
-    bComplex: has("egg", "turkey", "ham", "chicken", "pasta", "pea") ? 65 : 25,
-    zinc: has("turkey", "ham", "chicken", "egg", "cheese") ? 55 : 20,
-    potassium: has("apple", "pea", "spinach", "broccoli", "sweet potato", "veg") ? 50 : 20,
-    folate: has("spinach", "broccoli", "pea", "veg") ? 60 : 18,
-  };
-  Object.keys(base).forEach(k => base[k] = Math.min(150, Math.round(base[k] + Math.max(0, count - 1) * 6)));
-  return base;
+  if (!loggedMeals.length) return null;
+  const mealList = loggedMeals.map(m=>`${m.name} (${m.calories} cal, ${m.protein}g protein, ${m.fiber||0}g fiber)`).join("\n");
+  const prompt = `You are a nutrition estimator. Given these logged meals for today, estimate micronutrient coverage as a percentage of daily RDA for an adult woman.
+
+Logged meals:
+${mealList}
+
+Return ONLY valid JSON, no markdown, no explanation. Keys must be exactly: vitC, vitD, vitE, vitK, iron, magnesium, calcium, bComplex, zinc, potassium, folate
+Values = integer 0–150 representing % of RDA achieved. Be realistic — most people don't hit 100% of everything from food.
+Fiber is already tracked precisely as ${fiberActual}g of 25g goal (${Math.round(fiberActual/25*100)}%), do NOT include fiber in your response.`;
+
+  const res = await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:300,messages:[{role:"user",content:prompt}]})});
+  const data = await res.json();
+  const raw = data.content?.find(b=>b.type==="text")?.text||"{}";
+  return JSON.parse(raw.replace(/```json\n?|```\n?/g,"").trim());
 }
 
 const EMPTY = () => ({date:getTodayStr(),calories:0,protein:0,fiber:0,loggedMeals:[],cycleDay:null,notes:"",calorieGoalMin:1300,calorieGoalMax:1500,proteinGoal:140,fiberGoal:25});
@@ -245,6 +255,8 @@ function MealForm({meal,onSave,onDelete,onBack}) {
 
 function JFP() {
   const [tab,setTab]=useState("chat");
+  const [apiKey,setApiKey]=useState("");
+  const [keyInput,setKeyInput]=useState("");
   const [msgs,setMsgs]=useState([{role:"assistant",text:`JFP ready. Tracking ${getTodayStr()}. What have you eaten so far?`}]);
   const [inp,setInp]=useState(""); const [loading,setLoading]=useState(false);
   const [day,setDay]=useState(EMPTY()); const [saved,setSaved]=useState({});
@@ -266,6 +278,8 @@ function JFP() {
           else{if(st.date&&(st.loggedMeals?.length>0||st.calories>0)){const sdp=sd?.value?JSON.parse(sd.value):{};sdp[st.date]={...st,hitCalorieRange:st.calories>=1300&&st.calories<=1500,hitProteinGoal:st.protein>=140};setSaved(sdp);}setDay(EMPTY());}}
       }catch{}
       setStorageOk(true);
+      // Load saved API key from localStorage (for GitHub/external use)
+      try { const k=localStorage.getItem("jfp_api_key"); if(k) setApiKey(k); } catch {}
     })();
   },[]);
 
@@ -299,76 +313,32 @@ function JFP() {
 
   async function sendMessage(userContent){
     setLoading(true);
-    const txt = typeof userContent === "string" ? userContent.trim() : "";
-    const lower = txt.toLowerCase();
-    const reply = (text) => {
-      hist.current=[...hist.current.slice(-16),{role:"user",content:txt},{role:"assistant",content:text}];
-      setMsgs(p=>[...p,{role:"assistant",text}]);
-      setLoading(false);
-    };
-
-    setTimeout(()=>{
-      if (!txt) {
-        reply("I can’t read photos in this standalone HTML version yet. Type the product name and macros, and I’ll log it.");
-        return;
+    hist.current=[...hist.current.slice(-16),{role:"user",content:userContent}];
+    try{
+      const headers = {"Content-Type":"application/json"};
+      if (apiKey) {
+        headers["x-api-key"] = apiKey;
+        headers["anthropic-version"] = "2023-06-01";
+        headers["anthropic-dangerous-direct-browser-access"] = "true";
       }
-
-      if (/^(status|stats|totals|where am i)/i.test(lower)) {
-        reply(`Today you’re at ${day.calories} calories, ${day.protein}g protein, and ${day.fiber||0}g fiber. Targets: 1300–1500 calories, 140g protein, 25g fiber.`);
-        return;
+      const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers,body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:2000,tools:[{"type":"web_search_20250305","name":"web_search"}],system:buildPrompt(day,mealLib),messages:hist.current})});
+      const data=await res.json();
+      const textBlocks=data.content?.filter(b=>b.type==="text")??[];
+      const raw=textBlocks[textBlocks.length-1]?.text||"";
+      let parsed;
+      try {
+        parsed = JSON.parse(raw.replace(/```json\n?|```\n?/g,"").trim());
+      } catch {
+        const m = raw.match(/\{[\s\S]*"message"[\s\S]*"actions"[\s\S]*\}/);
+        try { parsed = m ? JSON.parse(m[0]) : null; } catch { parsed = null; }
+        if (!parsed) parsed = {message: raw.replace(/\{[\s\S]*\}$/,"").trim() || raw, actions:[]};
       }
-
-      if (/(new day|reset day|start over)/i.test(lower)) {
-        const nsd={...saved};
-        if(day.date&&(day.loggedMeals.length>0||day.calories>0)) nsd[day.date]={...day,hitCalorieRange:day.calories>=1300&&day.calories<=1500,hitProteinGoal:day.protein>=140};
-        setSaved(nsd);
-        const nd=EMPTY();
-        setDay(nd);
-        reply(`New day started for ${nd.date}.`);
-        return;
-      }
-
-      if (/(remove last|delete last|undo)/i.test(lower) && day.loggedMeals.length) {
-        const r = day.loggedMeals[day.loggedMeals.length-1];
-        const nd = {...day, calories:+(day.calories-r.calories).toFixed(1), protein:+(day.protein-r.protein).toFixed(1), fiber:+((day.fiber||0)-(r.fiber||0)).toFixed(1), loggedMeals:day.loggedMeals.slice(0,-1)};
-        setDay(nd);
-        reply(`Removed ${r.name}. You’re now at ${nd.calories} calories, ${nd.protein}g protein, and ${nd.fiber||0}g fiber.`);
-        return;
-      }
-
-      if (/\bmv\b|micro|vitamin/i.test(lower)) {
-        reply("For MV mode: tell me your cycle day first, then I’ll suggest a small micronutrient plate using safe foods like spinach, broccoli, carrots, peach, pear, or sunflower seeds.");
-        return;
-      }
-
-      const meal = mealLib.find(m => (m.aliases||[]).some(a => lower.includes(a.toLowerCase())) || lower.includes(m.name.toLowerCase()));
-      if (meal) {
-        const nd={...day,calories:+(day.calories+meal.cal).toFixed(1),protein:+(day.protein+meal.pro).toFixed(1),fiber:+((day.fiber||0)+(meal.fiber||0)).toFixed(1),loggedMeals:[...day.loggedMeals,{name:meal.name,calories:meal.cal,protein:meal.pro,fiber:meal.fiber||0,notes:"Saved meal"}]};
-        setDay(nd);
-        reply(`Logged ${meal.name}. You’re at ${nd.calories} calories, ${nd.protein}g protein, and ${nd.fiber||0}g fiber today.`);
-        return;
-      }
-
-      const calMatch = lower.match(/(\d+(?:\.\d+)?)\s*(?:cal|calories|cals)/);
-      const proMatch = lower.match(/(\d+(?:\.\d+)?)\s*(?:g\s*)?(?:protein|pro)/);
-      const fibMatch = lower.match(/(\d+(?:\.\d+)?)\s*(?:g\s*)?(?:fiber|fibre|fib)/);
-      if (calMatch && proMatch) {
-        const calories=+calMatch[1], protein=+proMatch[1], fiber=fibMatch?+fibMatch[1]:0;
-        const name = txt.replace(/\b\d+(?:\.\d+)?\s*(?:cal|calories|cals|g protein|protein|pro|g fiber|fiber|fibre|fib)\b/gi, "").replace(/[,.]/g, "").trim() || "Manual entry";
-        const nd={...day,calories:+(day.calories+calories).toFixed(1),protein:+(day.protein+protein).toFixed(1),fiber:+((day.fiber||0)+fiber).toFixed(1),loggedMeals:[...day.loggedMeals,{name,calories,protein,fiber,notes:"Manual entry"}]};
-        setDay(nd);
-        reply(`Logged ${name}. You’re at ${nd.calories} calories, ${nd.protein}g protein, and ${nd.fiber||0}g fiber today.`);
-        return;
-      }
-
-      if (/recipe|ingredients|what is in|show/i.test(lower)) {
-        const list = mealLib.slice(0,8).map(m=>`• ${m.name}: ${m.cal} cal, ${m.pro}g protein, ${m.fiber||0}g fiber`).join("\n");
-        reply(`Here are a few saved meals:\n${list}\n\nTo log one, type something like “log BEC” or “log pasta.”`);
-        return;
-      }
-
-      reply("I can log saved meals by name, show status, start a new day, remove last, or log a manual entry like “Greek yogurt 120 cal 15g protein 0g fiber.”");
-    }, 250);
+      const {nd,nsd}=applyActions(parsed.actions,day,saved);
+      setDay(nd);setSaved(nsd);
+      hist.current=[...hist.current,{role:"assistant",content:parsed.message}];
+      setMsgs(p=>[...p,{role:"assistant",text:parsed.message}]);
+    }catch{setMsgs(p=>[...p,{role:"assistant",text:"Connection error. Try again."}]);}
+    setLoading(false);
   }
 
   async function send(){const txt=inp.trim();if(!txt||loading) return;setInp("");setMsgs(p=>[...p,{role:"user",text:txt}]);await sendMessage(txt);}
@@ -436,13 +406,17 @@ function JFP() {
             </div>
             <div style={{fontSize:14,fontWeight:700,color:"#0d9488",letterSpacing:0.2}}>Johnni's Fitness Pal</div>
           </div>
-          <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:3,paddingTop:4}}><span style={{fontSize:18}}>🌸</span><SunSVG/></div>
+          <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:3,paddingTop:4}}>
+            <span style={{fontSize:18}}>🌸</span>
+            <SunSVG/>
+          </div>
         </div>
         <div style={{display:"flex",gap:5,marginTop:8,overflowX:"auto",paddingBottom:2}}>
           {tabBtn("chat","💬","Chat")}
           {tabBtn("meals","🍽","Meals")}
           {tabBtn("nutrition","🌿","Nutrition")}
           {tabBtn("calendar","📅","Calendar")}
+          {tabBtn("settings","⚙️","Settings")}
         </div>
       </div>
 
@@ -672,11 +646,45 @@ function JFP() {
         </div>
       )}
       <style>{`@keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}@keyframes shimmer{0%,100%{opacity:0.4}50%{opacity:1}}`}</style>
+
+      {/* ── SETTINGS ── */}
+      {tab==="settings"&&(
+        <div style={{flex:1,overflowY:"auto",padding:"16px 14px",position:"relative",zIndex:1}}>
+          <div style={{fontWeight:800,fontSize:15,color:"#3d2c1e",marginBottom:4}}>Settings</div>
+          <div style={{fontSize:12,color:"#9b8ea0",marginBottom:20}}>One-time setup for using JFP outside of claude.ai</div>
+
+          <div style={{background:CARD,borderRadius:18,padding:18,boxShadow:"0 2px 10px rgba(0,0,0,0.06)",marginBottom:14}}>
+            <div style={{fontWeight:700,fontSize:13,color:"#3d2c1e",marginBottom:4}}>🔑 Anthropic API Key</div>
+            <div style={{fontSize:12,color:"#9b8ea0",marginBottom:12,lineHeight:1.6}}>
+              Inside <strong>claude.ai</strong> this isn't needed — auth is handled automatically.<br/>
+              On <strong>GitHub or any external site</strong>, add your key here once and it'll be saved to your device.
+              <br/><a href="https://console.anthropic.com/keys" target="_blank" rel="noreferrer" style={{color:TEAL}}>Get a key at console.anthropic.com →</a>
+            </div>
+            <input value={keyInput} onChange={e=>setKeyInput(e.target.value)}
+              placeholder="sk-ant-..."
+              type="password"
+              style={{width:"100%",boxSizing:"border-box",background:"#f9f4ef",border:"2px solid #e8ddd4",borderRadius:12,padding:"10px 14px",fontSize:13,color:"#3d2c1e",outline:"none",marginBottom:12}}/>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>{
+                setApiKey(keyInput);
+                try{if(keyInput) localStorage.setItem("jfp_api_key",keyInput); else localStorage.removeItem("jfp_api_key");}catch{}
+              }} style={{flex:1,background:TEAL,border:"none",borderRadius:12,padding:"10px",color:"white",fontWeight:800,cursor:"pointer",fontSize:13}}>
+                Save
+              </button>
+              {apiKey&&<button onClick={()=>{setApiKey("");setKeyInput("");try{localStorage.removeItem("jfp_api_key");}catch{};}}
+                style={{background:"#fff0f0",border:"none",borderRadius:12,padding:"10px 16px",color:"#e05c5c",fontWeight:700,cursor:"pointer",fontSize:13}}>
+                Remove
+              </button>}
+            </div>
+            {apiKey&&<div style={{marginTop:10,fontSize:12,color:"#16a34a",fontWeight:600}}>✓ Key saved to this device</div>}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(<JFP />);
+    ReactDOM.createRoot(document.getElementById('root')).render(<JFP />);
   </script>
 </body>
 </html>
