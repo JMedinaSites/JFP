@@ -1,48 +1,55 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-   <link rel="apple-touch-icon" href="icon.png">
+    <link rel="apple-touch-icon" href="icon.png">
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>JFP — Johnni's Fitness Pal</title>
   <style>
-    html, body, #root {
+    html, body {
       margin: 0;
-      min-height: 100%;
+      padding: 0;
+      width: 100%;
       height: 100%;
       background: #fef8f2;
+      overflow: hidden;
     }
+    #root { width: 100%; height: 100vh; }
     * { box-sizing: border-box; }
-    button, input, textarea { font-family: inherit; }
+    @keyframes bounce {
+      0%, 80%, 100% { transform: translateY(0); opacity: 0.5; }
+      40% { transform: translateY(-6px); opacity: 1; }
+    }
+    @keyframes shimmer {
+      0% { opacity: 0.45; }
+      50% { opacity: 1; }
+      100% { opacity: 0.45; }
+    }
   </style>
-</head>
-<body>
-  <div id="root"></div>
-
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-
-  <script type="text/babel">
-    // Claude Artifacts provides window.storage. This shim makes the app work as a normal HTML file too.
-    if (!window.storage) {
-      window.storage = {
-        async get(key) {
-          const value = localStorage.getItem(key);
-          return value === null ? null : { value };
-        },
-        async set(key, value) {
-          localStorage.setItem(key, value);
-          return { value };
-        },
-        async delete(key) {
-          localStorage.removeItem(key);
-          return {};
-        }
-      };
-    }
-
-const { useState, useEffect, useRef } = React;
+</head>
+<body>
+  <div id="root"></div>
+  <script>
+    window.storage = {
+      async get(key) {
+        const value = localStorage.getItem(key);
+        return value === null ? null : { value };
+      },
+      async set(key, value) {
+        localStorage.setItem(key, value);
+        return { key, value };
+      },
+      async remove(key) {
+        localStorage.removeItem(key);
+        return { key };
+      }
+    };
+  </script>
+  <script type="text/babel" data-presets="env,react">
+    const { useState, useEffect, useRef } = React;
 
 const BASE_MEALS = [
   { id:"bec", name:"BEC", cal:312, pro:26, fiber:2, aliases:["bec"], ing:["Thomas' Lite Multi-Grain English Muffin — 100 cal / 4g","Oscar Mayer Low Sodium Bacon, 19g — 90 cal / 7g","Egg mix, 1/6 batch (163g whole egg + 405g whites) — 64 cal / 8.75g","Sargento Ultra Thin Swiss — 40 cal / 2g","Fairlife Fat-Free Milk, 10g — 8 cal / 1.6g"], swaps:["Bagel Thin — 110 cal / 4g","Buttermilk Muffin — 130 cal / 4g"], addOns:[] },
@@ -315,13 +322,15 @@ function JFP() {
     setLoading(true);
     hist.current=[...hist.current.slice(-16),{role:"user",content:userContent}];
     try{
-      const headers = {"Content-Type":"application/json"};
-      if (apiKey) {
-        headers["x-api-key"] = apiKey;
-        headers["anthropic-version"] = "2023-06-01";
-        headers["anthropic-dangerous-direct-browser-access"] = "true";
-      }
-      const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers,body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:2000,tools:[{"type":"web_search_20250305","name":"web_search"}],system:buildPrompt(day,mealLib),messages:hist.current})});
+      const storedKey = (() => { try { return localStorage.getItem("jfp_api_key"); } catch { return null; } })();
+      const activeKey = apiKey || storedKey || "";
+      const headers = {
+        "Content-Type": "application/json",
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true",
+        ...(activeKey ? {"x-api-key": activeKey} : {})
+      };
+      const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers,body:JSON.stringify({model:"claude-3-7-sonnet-latest",max_tokens:2000,tools:[{"type":"web_search_20250305","name":"web_search","max_uses":5}],system:buildPrompt(day,mealLib),messages:hist.current})});
       const data=await res.json();
       const textBlocks=data.content?.filter(b=>b.type==="text")??[];
       const raw=textBlocks[textBlocks.length-1]?.text||"";
